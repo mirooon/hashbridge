@@ -1,0 +1,9 @@
+[package]
+name = "hashbridge"
+edition = "2024"
+
+# Sui CLI >= 1.45 dodaje zależności Sui/MoveStdlib automatycznie.
+[dependencies]
+
+[addresses]
+hashbridge = "0x0"

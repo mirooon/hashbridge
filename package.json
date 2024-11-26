@@ -1,0 +1,12 @@
+{
+  "name": "hashbridge",
+  "private": true,
+  "packageManager": "pnpm@9.15.9",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @hashbridge/bot --filter @hashbridge/web dev",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "test:move": "cd contracts/sui && sui move test"
+  }
+}

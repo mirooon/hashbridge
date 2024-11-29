@@ -6,6 +6,8 @@
 ///   OP_ENDIF
 ///
 /// Hash to SHA-256, czyli ten sam sekret odblokowuje obie strony.
+/// Preimage musi mieć dokładnie 32 bajty, tak jak `OP_SIZE 32` w skrypcie BTC.
+/// Inaczej sekret dłuższy niż 520 bajtów przeszedłby tutaj, ale nie na Bitcoinie.
 /// `claim` publikuje preimage w evencie, więc druga strona może go
 /// odczytać i odebrać BTC.
 module hashbridge::htlc;
@@ -22,6 +24,7 @@ const ETimelockInPast: u64 = 2;
 const EWrongPreimage: u64 = 3;
 const EExpired: u64 = 4;
 const ENotExpired: u64 = 5;
+const EBadPreimageLength: u64 = 6;
 
 /// Zamknięte środki. Obiekt jest współdzielony (shared), bo muszą go móc
 /// dotknąć dwie strony: odbiorca przy `claim`, nadawca przy `refund`.
@@ -84,6 +87,7 @@ public fun lock<T>(
 /// Każdy może podać preimage, ale środki zawsze idą do `recipient`.
 public fun claim<T>(htlc: Htlc<T>, preimage: vector<u8>, clock: &Clock, ctx: &mut TxContext) {
     assert!(clock.timestamp_ms() < htlc.refund_after_ms, EExpired);
+    assert!(preimage.length() == 32, EBadPreimageLength);
     assert!(sha2_256(preimage) == htlc.hash, EWrongPreimage);
 
     let Htlc { id, balance, sender: _, recipient, hash: _, refund_after_ms: _ } = htlc;

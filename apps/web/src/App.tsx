@@ -1,10 +1,9 @@
 import { useMemo, useState, type ReactNode } from 'react';
-import { SuiClient } from '@mysten/sui/client';
 import { EsploraClient } from '@hashbridge/core/esplora';
 import type { RecoveryFile, SwapView } from '@hashbridge/core/types';
 import { ImportRecovery } from './components/ImportRecovery';
 import { Steps } from './components/Steps';
-import { API_URL, ESPLORA_URL, HTLC_PACKAGE_ID, SUI_RPC_URL } from './config';
+import { API_URL, ESPLORA_URL, HTLC_PACKAGE_ID, SUI_GRAPHQL_URL } from './config';
 import { useHashRoute } from './hooks/useHashRoute';
 import { useNow } from './hooks/useNow';
 import { useSwapProgress } from './hooks/useSwapProgress';
@@ -12,6 +11,7 @@ import { createApi } from './lib/api';
 import { STEP_LABELS, screenFor, stepIndex, swapHref } from './lib/flow';
 import { refundOffered } from './lib/refund';
 import { createSwapStorage, type LocalSwapState } from './lib/storage';
+import { createGraphqlHtlcReader } from './lib/sui-verify';
 import { DepositStep } from './screens/DepositStep';
 import { DoneStep } from './screens/DoneStep';
 import { RecoveryStep } from './screens/RecoveryStep';
@@ -21,7 +21,7 @@ import { TimelineStep } from './screens/TimelineStep';
 
 const api = createApi(API_URL);
 const esplora = new EsploraClient(ESPLORA_URL);
-const suiClient = new SuiClient({ url: SUI_RPC_URL });
+const htlcReader = createGraphqlHtlcReader(SUI_GRAPHQL_URL);
 const storage = createSwapStorage();
 
 export interface AppSlots {
@@ -83,7 +83,7 @@ function SwapPage({ id, slots }: { id: string; slots: AppSlots }) {
 function ActiveSwap({ local, onLocalChange, slots }: { local: LocalSwapState; onLocalChange(state: LocalSwapState): void; slots: AppSlots }) {
   const { recovery } = local;
   const swapApi = useMemo(() => createApi(recovery.apiUrl), [recovery.apiUrl]);
-  const progress = useSwapProgress({ api: swapApi, storage, suiClient, packageId: HTLC_PACKAGE_ID, recovery, esplora });
+  const progress = useSwapProgress({ api: swapApi, storage, htlcReader, packageId: HTLC_PACKAGE_ID, recovery, esplora });
   const [showRefund, setShowRefund] = useState(false);
   const now = useNow(5_000);
   const screen = showRefund ? 'refund' : screenFor(local, progress.view);

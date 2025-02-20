@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import type { SuiClient } from '@mysten/sui/client';
 import type { BtcChain, RecoveryFile, SwapView, Utxo } from '@hashbridge/core/types';
 import type { HashbridgeApi } from '../lib/api';
 import { MIN_REMAINING_BEFORE_REVEAL_MS, minExpectedMist, nextClaimAction, paidSatsFrom } from '../lib/claim-flow';
 import type { SwapStorage } from '../lib/storage';
-import { fetchHtlc, verifyHtlc } from '../lib/sui-verify';
+import { verifyHtlc, type HtlcReader } from '../lib/sui-verify';
 import { useNow } from './useNow';
 
 export const POLL_MS = 2_000;
@@ -23,13 +22,13 @@ const message = (err: unknown): string => (err instanceof Error ? err.message : 
 export function useSwapProgress(opts: {
   api: HashbridgeApi;
   storage: SwapStorage;
-  suiClient: Pick<SuiClient, 'getObject'>;
+  htlcReader: HtlcReader;
   packageId: string;
   recovery: RecoveryFile;
   /** When given, the paid amount is read from the Bitcoin chain instead of trusting the bot's report. */
   esplora?: BtcChain;
 }): SwapProgress {
-  const { api, storage, suiClient, packageId, recovery, esplora } = opts;
+  const { api, storage, htlcReader, packageId, recovery, esplora } = opts;
   const [view, setView] = useState<SwapView | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
   const [lastApiOkAt, setLastApiOkAt] = useState<number | null>(null);
@@ -82,7 +81,7 @@ export function useSwapProgress(opts: {
     const verify = async (): Promise<string[]> => {
       let htlc;
       try {
-        htlc = await fetchHtlc(suiClient, action.htlcObjectId);
+        htlc = await htlcReader.fetchHtlc(action.htlcObjectId);
       } catch (err) {
         return [`could not read the HTLC from Sui: ${message(err)}`];
       }
@@ -132,7 +131,7 @@ export function useSwapProgress(opts: {
     })().finally(() => {
       busy.current = false;
     });
-  }, [view, now, api, storage, suiClient, packageId, recovery, esplora]);
+  }, [view, now, api, storage, htlcReader, packageId, recovery, esplora]);
 
   return { view, apiError, lastApiOkAt, problems, claimError, fallback };
 }

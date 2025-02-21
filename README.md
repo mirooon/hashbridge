@@ -2,7 +2,7 @@
 
 Trustless BTC → SUI atomic swaps. Send Bitcoin on signet and receive SUI on testnet in about a minute. No custodian or bridge contract ever holds your funds.
 
-**App:** https://hashbridge.vercel.app · **Resolver API:** https://hashbridge-bot.onrender.com/health
+**App:** https://mirooon.github.io/hashbridge/ · **Resolver API:** https://hashbridge-bot.onrender.com/health · **Contract:** [0xe7de…0061](https://suiscan.xyz/testnet/object/0xe7de5f027f995a169f4bce706aa7dad4440a60cdcfcc4bee4d7219c0098d0061)
 
 ## What it does
 
@@ -88,10 +88,10 @@ AWAITING_DEPOSIT → DEPOSIT_SEEN → SUI_LOCKED → SUI_CLAIMED → BTC_CLAIMED
 ## Architecture
 
 ```
-            ┌──────────────────────────┐
-            │  Browser (Vite + React)  │  secrets, refund key, script checks,
-            │  hashbridge.vercel.app   │  Sui object verification, refunds
-            └──────┬─────────┬─────────┘
+            ┌───────────────────────────────┐
+            │  Browser (Vite + React)       │  secrets, refund key, script checks,
+            │  mirooon.github.io/hashbridge │  Sui object verification, refunds
+            └──────┬─────────┬──────────────┘
        quotes,     │         │  direct reads
        status,     │         ├──────────────► Sui full node (testnet)
        claim relay │         └──────────────► Esplora (mempool.space/signet)
@@ -181,10 +181,11 @@ Everything runs on free tiers with free domains:
 
 | Part | Host | Address |
 |---|---|---|
-| Web | Vercel | https://hashbridge.vercel.app |
+| Web | GitHub Pages (free, deployed by .github/workflows/pages.yml) | https://mirooon.github.io/hashbridge/ |
+| Web (alternative) | Vercel (apps/web/vercel.json) | connect in the dashboard |
 | Resolver bot | Render free web service (`render.yaml`) | https://hashbridge-bot.onrender.com |
 | Keep-alive | UptimeRobot free monitor on `/health` every 5 min | — |
-| Contract | Sui testnet | `HTLC_PACKAGE_ID` |
+| Contract | Sui testnet | `0xe7de5f027f995a169f4bce706aa7dad4440a60cdcfcc4bee4d7219c0098d0061` |
 
 See `docs/deploy.md` for the details and the free-tier limits.
 

@@ -1,0 +1,47 @@
+name: Deploy web to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No `version` input: the packageManager field in the root package.json pins pnpm.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build apps/web for the /hashbridge/ sub-path
+        run: pnpm --filter @hashbridge/web exec vite build --base /hashbridge/
+        env:
+          VITE_HTLC_PACKAGE_ID: "0xe7de5f027f995a169f4bce706aa7dad4440a60cdcfcc4bee4d7219c0098d0061"
+          VITE_API_URL: https://hashbridge-bot.onrender.com
+          VITE_ESPLORA_URL: https://mempool.space/signet/api
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

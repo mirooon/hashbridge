@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: hashbridge-bot
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: corepack enable && pnpm install --frozen-lockfile
+    startCommand: pnpm --filter @hashbridge/bot start
+    healthCheckPath: /health
+    # A redeploy wipes the SQLite file on the free plan, so deploys are manual.
+    autoDeploy: false
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DB_PATH
+        value: /tmp/hashbridge.db
+      - key: RATE
+        value: "12400"
+      - key: MIN_CONF
+        value: "0"
+      - key: BTC_WIF
+        sync: false
+      - key: SUI_PRIVATE_KEY
+        sync: false
+      # Public package id, so it needs no secret entry in the dashboard.
+      - key: HTLC_PACKAGE_ID
+        value: "0xe7de5f027f995a169f4bce706aa7dad4440a60cdcfcc4bee4d7219c0098d0061"

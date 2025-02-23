@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EsploraClient, FALLBACK_FEE_RATE } from '../src/esplora';
+import { ESPLORA_TIMEOUT_MS, EsploraClient, FALLBACK_FEE_RATE } from '../src/esplora';
 
 const BASE = 'https://esplora.test/api';
 
@@ -58,6 +58,39 @@ describe('EsploraClient', () => {
   it('throws on HTTP errors for reads', async () => {
     const { fn } = fakeFetch({});
     await expect(new EsploraClient(BASE, fn).tipHeight()).rejects.toThrow(/404/);
+  });
+
+  it('rejects tip heights that are not plain decimal digits', async () => {
+    for (const body of ['', '0x10', '1e3', '12.5', '-1', ' ']) {
+      const { fn } = fakeFetch({ [`GET ${BASE}/blocks/tip/height`]: { body } });
+      await expect(new EsploraClient(BASE, fn).tipHeight()).rejects.toThrow(/unexpected tip height/);
+    }
+  });
+
+  it('gives every request a timeout signal', async () => {
+    const { fn, calls } = fakeFetch({
+      [`GET ${BASE}/blocks/tip/height`]: { body: '1' },
+      [`GET ${BASE}/address/tb1qxyz/utxo`]: { body: '[]' },
+      [`POST ${BASE}/tx`]: { body: 'cc'.repeat(32) },
+      [`GET ${BASE}/fee-estimates`]: { body: '{"2":1}' },
+    });
+    const client = new EsploraClient(BASE, fn);
+    await client.tipHeight();
+    await client.addressUtxos('tb1qxyz');
+    await client.broadcast('00');
+    await client.feeRate();
+    expect(calls).toHaveLength(4);
+    for (const call of calls) expect(call.init?.signal).toBeInstanceOf(AbortSignal);
+    expect(ESPLORA_TIMEOUT_MS).toBe(15_000);
+  });
+
+  it('aborts a request that stalls past the timeout', async () => {
+    const stalled = (_url: string, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal!.reason));
+      });
+    await expect(new EsploraClient(BASE, stalled, 20).tipHeight()).rejects.toThrow(/timeout|aborted/i);
+    await expect(new EsploraClient(BASE, stalled, 20).broadcast('00')).rejects.toThrow(/timeout|aborted/i);
   });
 
   it('strips a trailing slash from the base URL', async () => {

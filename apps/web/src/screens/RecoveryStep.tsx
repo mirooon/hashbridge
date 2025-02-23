@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { RecoveryFile } from '@hashbridge/core/types';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
+import { formatBtc, formatSui } from '../lib/format';
 import { recoveryFileName, serializeRecoveryFile } from '../lib/storage';
 
 export function RecoveryStep({ recovery, onDone }: { recovery: RecoveryFile; onDone(): void }) {
@@ -20,6 +21,9 @@ export function RecoveryStep({ recovery, onDone }: { recovery: RecoveryFile; onD
 
   return (
     <Card title="Save your recovery file">
+      <p className="mb-4 rounded-xl bg-slate-800/50 px-4 py-3 text-sm text-slate-300">
+        You send {formatBtc(recovery.btcSats)} BTC · You receive ≈ {formatSui(recovery.suiAmount)} SUI
+      </p>
       <p className="text-sm text-slate-300">
         This file holds your secret and your refund key. If this browser loses its data before the swap finishes, the file is the
         only way to get your BTC back.

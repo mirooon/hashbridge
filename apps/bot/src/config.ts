@@ -4,6 +4,8 @@ type Env = Record<string, string | undefined>;
 
 const REQUIRED = ['BTC_WIF', 'SUI_PRIVATE_KEY', 'HTLC_PACKAGE_ID', 'RATE'] as const;
 const BLOCK_MS = 600_000;
+/** Time the bot keeps for claiming the BTC after the Sui deadline (finding the secret, broadcasting, confirming). */
+export const BTC_CLAIM_MARGIN_MS = 30 * 60_000;
 
 export function loadConfig(env: Env = process.env): BotConfig {
   const missing = REQUIRED.filter((key) => !env[key]);
@@ -45,8 +47,16 @@ export function loadConfig(env: Env = process.env): BotConfig {
 
   if (config.rate <= 0) throw new Error('RATE must be positive');
   if (config.minBtcSats > config.maxBtcSats) throw new Error('MIN_BTC_SATS must not exceed MAX_BTC_SATS');
+  if (config.safetyBlocks < 1) throw new Error('SAFETY_BLOCKS must be at least 1');
   if (config.suiTimeoutMs >= config.btcLocktimeBlocks * BLOCK_MS) {
     throw new Error('SUI_TIMEOUT_MS must be shorter than BTC_LOCKTIME_BLOCKS × 10 min, otherwise the bot can lose the BTC');
+  }
+  // The lock guard (tip + SAFETY_BLOCKS < locktime) only promises SAFETY_BLOCKS blocks before the BTC refund opens:
+  // the Sui deadline plus the BTC-claim margin must fit in them, or a user claiming late could leave no time to take the BTC.
+  if (config.suiTimeoutMs + BTC_CLAIM_MARGIN_MS > config.safetyBlocks * BLOCK_MS) {
+    throw new Error(
+      'SUI_TIMEOUT_MS + 30 min must fit in SAFETY_BLOCKS × 10 min (blocks left before the BTC locktime when SUI is locked), otherwise the bot can lose the BTC',
+    );
   }
   return config;
 }

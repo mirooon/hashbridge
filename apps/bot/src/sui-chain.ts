@@ -4,16 +4,8 @@ import { SuiGraphQLClient } from '@mysten/sui/graphql';
 import { SuiGrpcClient } from '@mysten/sui/grpc';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { Transaction, TransactionDataBuilder, type TransactionPlugin } from '@mysten/sui/transactions';
-// Deviation from the brief: hex helpers come from @mysten/sui/utils because @hashbridge/core/secret (Task 3) is not merged yet.
-import {
-  fromBase64,
-  fromHex as hexToBytes,
-  normalizeStructTag,
-  normalizeSuiAddress,
-  normalizeSuiObjectId,
-  toBase64,
-  toHex as bytesToHex,
-} from '@mysten/sui/utils';
+import { fromBase64, normalizeStructTag, normalizeSuiAddress, normalizeSuiObjectId, toBase64 } from '@mysten/sui/utils';
+import { bytesToHex, hexToBytes } from '@hashbridge/core/secret';
 import type { ClaimEventInfo, LockParams, SignedTx, SuiChain, SuiTxKind, SuiTxResult } from './types';
 
 export interface SuiChainOptions {
@@ -48,6 +40,13 @@ const CALL_TIMEOUT_MS = 30_000;
 const FINALITY_TIMEOUT_MS = 60_000;
 const FINALITY_POLL_MS = 1_000;
 const MAX_CLAIM_PAGES = 20;
+
+/** Coin fields read from ListOwnedObjects; `balance` is Object field 101 (set for `0x2::coin::Coin<T>` objects). */
+export const COIN_READ_MASK = ['object_id', 'version', 'digest', 'balance'];
+/** Sui accepts at most 256 gas payment objects per transaction. */
+export const MAX_GAS_COINS = 255;
+const COIN_PAGE_SIZE = 1_000;
+const MAX_COIN_PAGES = 10;
 
 // Move event layouts from contracts/sui/sources/htlc.move (an `ID` is serialized like an address).
 const LockedEvent = bcs.struct('Locked', {
@@ -232,6 +231,62 @@ async function grpc<T>(call: PromiseLike<T>): Promise<T> {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** The subset of a gRPC `Object` selected by COIN_READ_MASK. */
+export interface CoinObject {
+  objectId?: string;
+  version?: bigint;
+  digest?: string;
+  balance?: bigint;
+}
+
+export interface GasCoin {
+  objectId: string;
+  version: string;
+  digest: string;
+  balance: bigint;
+}
+
+/** Reads every page of a ListOwnedObjects listing, up to `maxPages` (a cut-off listing only under-counts the SUI). */
+export async function listAllCoinPages(
+  fetchPage: (pageToken: Uint8Array | undefined) => Promise<{ objects: CoinObject[]; nextPageToken?: Uint8Array }>,
+  maxPages = MAX_COIN_PAGES,
+): Promise<CoinObject[]> {
+  const all: CoinObject[] = [];
+  let token: Uint8Array | undefined;
+  for (let i = 0; i < maxPages; i++) {
+    const page = await fetchPage(token);
+    all.push(...page.objects);
+    if (!page.nextPageToken?.length) break;
+    token = page.nextPageToken;
+  }
+  return all;
+}
+
+/**
+ * The SUI coin objects one transaction can spend: the largest MAX_GAS_COINS. They are both the gas payment of every tx
+ * the bot signs and, summed, its liquidity, so the bot never counts SUI it cannot spend (such as an address balance).
+ */
+export function spendableCoins(objects: readonly CoinObject[]): GasCoin[] {
+  return objects
+    .filter((c) => c.objectId && c.version !== undefined && c.digest)
+    .map((c) => ({ objectId: c.objectId!, version: String(c.version), digest: c.digest!, balance: c.balance ?? 0n }))
+    .sort((a, b) => (a.balance === b.balance ? 0 : a.balance > b.balance ? -1 : 1))
+    .slice(0, MAX_GAS_COINS);
+}
+
+export function sumBalances(coins: readonly GasCoin[]): bigint {
+  return coins.reduce((sum, c) => sum + c.balance, 0n);
+}
+
+const SPLIT_COIN_COMMAND = (address: string) =>
+  `sui client ptb --split-coins gas "[500000000]" --assign c --transfer-objects "[c]" @${address}`;
+
+/** Startup warning when the address holds more SUI (getBalance) than its spendable coin objects. */
+export function addressBalanceWarning(coinMist: bigint, totalMist: bigint, address: string): string | null {
+  if (totalMist <= coinMist) return null;
+  return `${totalMist - coinMist} MIST held as address balance cannot pay gas; split coins with ${SPLIT_COIN_COMMAND(address)}`;
+}
+
 /**
  * gRPC call options with a deadline. With grpc-web, `timeout` only sends the grpc-timeout header to the server; the abort
  * signal is what cuts a stalled connection on our side.
@@ -241,12 +296,16 @@ const deadline = () => ({ timeout: CALL_TIMEOUT_MS, abort: AbortSignal.timeout(C
 function noGasCoinsError(address: string): Error {
   return new Error(
     `No SUI coin objects to pay gas with at ${address}. The key may hold SUI only as an address balance, which ` +
-      `@mysten/sui 1.45.2 cannot spend for gas (balanceMist() still counts it). Fix: split a coin object off it, e.g. ` +
-      `sui client ptb --split-coins gas "[500000000]" --assign c --transfer-objects "[c]" @${address}`,
+      `@mysten/sui 1.45.2 cannot spend for gas. Fix: split a coin object off it, e.g. ${SPLIT_COIN_COMMAND(address)}`,
   );
 }
 
-export function createSuiChain(opts: SuiChainOptions): SuiChain {
+export interface BotSuiChain extends SuiChain {
+  /** All SUI of the address (coin objects plus address balance), for the startup warning only. */
+  totalBalanceMist(): Promise<bigint>;
+}
+
+export function createSuiChain(opts: SuiChainOptions): BotSuiChain {
   const graphqlUrl = opts.graphqlUrl ?? graphqlUrlFor(opts.rpcUrl);
   const network = networkOf(opts.rpcUrl) ?? 'unknown';
   const client = new SuiGrpcClient({ network, baseUrl: opts.rpcUrl });
@@ -285,19 +344,25 @@ export function createSuiChain(opts: SuiChainOptions): SuiChain {
       data.gasConfig.budget = String(gasBudgetFromDryRun(effects.gasUsed, BigInt(data.gasConfig.price)));
     }
     if (!data.gasConfig.payment) {
-      // First page only (the server's page size, 50 on testnet), like the SDK's JSON-RPC resolver.
-      const { response } = await grpc(
-        client.stateService.listOwnedObjects(
-          { owner: address, objectType: SUI_COIN_TYPE, readMask: { paths: ['object_id', 'version', 'digest'] } },
-          deadline(),
-        ),
-      );
-      const coins = response.objects.filter((c) => c.objectId && c.version !== undefined && c.digest);
+      const coins = await listSpendableCoins();
       if (coins.length === 0) throw noGasCoinsError(address);
-      data.gasConfig.payment = coins.map((c) => ({ objectId: c.objectId!, version: String(c.version), digest: c.digest! }));
+      data.gasConfig.payment = coins.map(({ objectId, version, digest }) => ({ objectId, version, digest }));
     }
     await next();
   };
+
+  async function listSpendableCoins(): Promise<GasCoin[]> {
+    const objects = await listAllCoinPages(async (pageToken) => {
+      const { response } = await grpc(
+        client.stateService.listOwnedObjects(
+          { owner: address, objectType: SUI_COIN_TYPE, pageSize: COIN_PAGE_SIZE, pageToken, readMask: { paths: COIN_READ_MASK } },
+          deadline(),
+        ),
+      );
+      return response;
+    });
+    return spendableCoins(objects);
+  }
 
   async function sign(kind: SuiTxKind, tx: Transaction): Promise<SignedTx> {
     tx.setSender(address);
@@ -352,7 +417,12 @@ export function createSuiChain(opts: SuiChainOptions): SuiChain {
   return {
     address: () => address,
 
+    // Only coin objects can pay for a lock (an address balance cannot be spent by this SDK), so only they count.
     async balanceMist() {
+      return sumBalances(await listSpendableCoins());
+    },
+
+    async totalBalanceMist() {
       const { response } = await grpc(client.stateService.getBalance({ owner: address, coinType: SUI_TYPE }, deadline()));
       return response.balance?.balance ?? 0n;
     },

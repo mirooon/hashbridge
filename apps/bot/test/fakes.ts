@@ -107,10 +107,13 @@ export class FakeSuiChain implements SuiChain {
   executed = new Map<string, SuiTxResult>();
   claims = new Map<string, ClaimEventInfo>();
   lastLock: LockParams | null = null;
+  locks: LockParams[] = [];
   lastClaim: { htlcObjectId: string; preimage: string } | null = null;
   lastRefund: string | null = null;
   executeError: Error | null = null;
   nextFails = false;
+  /** Lock txs succeed but carry no parseable Locked event (e.g. after a package upgrade). */
+  noLockedEvent = false;
   executeDelayMs = 0;
   private counter = 0;
 
@@ -124,6 +127,7 @@ export class FakeSuiChain implements SuiChain {
 
   async signLock(params: LockParams) {
     this.lastLock = params;
+    this.locks.push(params);
     return this.sign('lock');
   }
 
@@ -150,7 +154,7 @@ export class FakeSuiChain implements SuiChain {
       digest: tx.digest,
       success: !failed,
       error: failed ? 'MoveAbort(htlc, 3)' : null,
-      htlcObjectId: tx.kind === 'lock' && !failed ? `htlc-of-${tx.digest}` : null,
+      htlcObjectId: tx.kind === 'lock' && !failed && !this.noLockedEvent ? `htlc-of-${tx.digest}` : null,
     };
     this.executed.set(tx.digest, result);
     return result;

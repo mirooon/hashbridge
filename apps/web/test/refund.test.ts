@@ -84,8 +84,21 @@ describe('importRecoveryFile', () => {
   it('saves a consistent recovery file', () => {
     const storage = createSwapStorage(memoryStore());
     const state = importRecoveryFile(JSON.stringify(recovery), storage);
-    expect(state).toEqual({ recovery, recoveryDownloaded: true, claimSentAt: null });
+    expect(state).toEqual({ recovery, recoveryDownloaded: true, revealedAt: null, revealedHtlcId: null });
     expect(storage.load('swap-1')?.recovery.swapId).toBe('swap-1');
+  });
+
+  it('keeps the reveal marker of a swap already stored in this browser', () => {
+    const storage = createSwapStorage(memoryStore());
+    storage.save({ recovery, recoveryDownloaded: true, revealedAt: 42, revealedHtlcId: '0xh' });
+    expect(importRecoveryFile(JSON.stringify(recovery), storage)).toEqual({ recovery, recoveryDownloaded: true, revealedAt: 42, revealedHtlcId: '0xh' });
+    expect(storage.load('swap-1')?.revealedAt).toBe(42);
+  });
+
+  it('drops a stored reveal marker that belongs to another secret under the same swap id', () => {
+    const storage = createSwapStorage(memoryStore());
+    storage.save({ recovery: { ...recovery, hash: 'cd'.repeat(32) }, recoveryDownloaded: true, revealedAt: 42, revealedHtlcId: '0xh' });
+    expect(importRecoveryFile(JSON.stringify(recovery), storage)).toEqual({ recovery, recoveryDownloaded: true, revealedAt: null, revealedHtlcId: null });
   });
 
   it('rejects files whose secret or address do not add up', () => {

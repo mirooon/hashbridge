@@ -1,7 +1,7 @@
 # Demo checklist
 
 ## Before going on stage
-- [ ] Bot BTC balance ≥ 0.001 tBTC, Sui balance ≥ 50 SUI (`curl https://hashbridge-bot.onrender.com/health`)
+- [ ] Bot BTC balance ≥ 0.001 tBTC, Sui balance ≥ 50 SUI in coin objects (`curl https://hashbridge-bot.onrender.com/health` shows only coin objects as `suiMist`; the bot log warns at startup about SUI held as an address balance)
 - [ ] UptimeRobot monitor is "Up" and nobody redeployed the bot since the last swap
 - [ ] `MIN_CONF=0`, `BTC_LOCKTIME_BLOCKS=72`, `SUI_TIMEOUT_MS=3600000` on Render (and in local `apps/bot/.env`)
 - [ ] `VITE_HTLC_PACKAGE_ID` equals `HTLC_PACKAGE_ID`
@@ -15,7 +15,7 @@
 
 1. Prepare the environment.
    1. Run `pnpm --filter @hashbridge/bot gen-keys` and put the keys into `apps/bot/.env`.
-   2. Fund the bot's BTC address (at least 0.001 tBTC for fees) and the bot's Sui address (at least 50 SUI).
+   2. Fund the bot's BTC address (at least 0.001 tBTC for fees) and the bot's Sui address (at least 50 SUI **in coin objects**; an address balance from the faucet cannot pay gas). If the bot logs `MIST held as address balance cannot pay gas`, split coins off it: `sui client ptb --split-coins gas "[500000000]" --assign c --transfer-objects "[c]" @<bot address>`.
    3. Run `./contracts/sui/scripts/publish.sh` and set `HTLC_PACKAGE_ID` and `VITE_HTLC_PACKAGE_ID`.
    4. Run `pnpm dev`.
 
@@ -29,7 +29,7 @@
    Expected within about 1 minute: the timeline goes through all the steps, the "Swap complete" screen shows the SUI amount, the links open the transactions on mempool.space/signet and Suiscan, and the bot log shows `BTC claimed`.
 
 3. Refund scenario.
-   1. Locally (so production is not touched): stop the local bot, set `BTC_LOCKTIME_BLOCKS=2` and `SUI_TIMEOUT_MS=600000` in `apps/bot/.env`, run `pnpm dev`, and open `http://localhost:5173`.
+   1. Locally (so production is not touched): stop the local bot, set `BTC_LOCKTIME_BLOCKS=2` and `SUI_TIMEOUT_MS=600000` (keep `SAFETY_BLOCKS=12`) in `apps/bot/.env`, run `pnpm dev`, and open `http://localhost:5173`.
    2. Start a new swap and pay. The bot rejects the deposit (`too close to the BTC locktime`) and the UI shows the refund screen.
    3. After about 2 blocks (about 20 minutes), enter your own signet address and click "Refund BTC".
 

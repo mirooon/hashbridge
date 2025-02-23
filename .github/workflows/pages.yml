@@ -26,6 +26,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Unit tests and typecheck
+        run: pnpm test && pnpm typecheck
       - name: Build apps/web for the /hashbridge/ sub-path
         run: pnpm --filter @hashbridge/web exec vite build --base /hashbridge/
         env:

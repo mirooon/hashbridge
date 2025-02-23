@@ -1,7 +1,8 @@
 import { buildWitnessScript, htlcAddress } from '@hashbridge/core/htlc-script';
 import { randomBtcKey } from '@hashbridge/core/keys';
+import { quoteMist } from '@hashbridge/core/pricing';
 import { bytesToHex, generateSecret, hashSecret, hexToBytes } from '@hashbridge/core/secret';
-import type { CreateSwapRequest, CreateSwapResponse, RecoveryFile } from '@hashbridge/core/types';
+import type { CreateSwapRequest, CreateSwapResponse, HealthResponse, RecoveryFile } from '@hashbridge/core/types';
 
 export const MAX_LOCKTIME_AHEAD_BLOCKS = 300;
 
@@ -49,6 +50,16 @@ export function verifyBotResponse(prep: PreparedSwap, res: CreateSwapResponse, t
   if (bytesToHex(expected) !== res.witnessScript) problems.push('HTLC script from the bot does not match the one computed locally');
   if (htlcAddress(expected) !== res.htlcAddress) problems.push('deposit address from the bot does not match the one computed locally');
   return problems;
+}
+
+/**
+ * The bot's binding quote must not be worse than the estimate the form displayed (from GET /health). Without a displayed
+ * rate only the format is checked.
+ */
+export function quoteProblems(suiAmount: string, btcSats: number, health: Pick<HealthResponse, 'rate' | 'spreadBps'> | null): string[] {
+  if (typeof suiAmount !== 'string' || !/^\d+$/.test(suiAmount)) return ['bot quote is malformed'];
+  if (health && BigInt(suiAmount) < quoteMist(btcSats, health.rate, health.spreadBps)) return ['bot quote is below the displayed rate'];
+  return [];
 }
 
 export function buildRecovery(prep: PreparedSwap, req: CreateSwapRequest, res: CreateSwapResponse, apiUrl: string, now: number): RecoveryFile {

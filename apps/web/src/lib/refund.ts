@@ -42,7 +42,15 @@ export function importRecoveryFile(text: string, storage: SwapStorage): LocalSwa
   if (htlcAddress(hexToBytes(recovery.witnessScript)) !== recovery.htlcAddress) {
     throw new Error('Invalid recovery file: HTLC address does not match the script');
   }
-  const state: LocalSwapState = { recovery, recoveryDownloaded: true, claimSentAt: null };
+  // Re-importing a swap this browser already revealed must not forget the reveal, but only for the same secret.
+  const stored = storage.load(recovery.swapId);
+  const existing = stored?.recovery.hash === recovery.hash ? stored : null;
+  const state: LocalSwapState = {
+    recovery,
+    recoveryDownloaded: true,
+    revealedAt: existing?.revealedAt ?? null,
+    revealedHtlcId: existing?.revealedHtlcId ?? null,
+  };
   storage.save(state);
   return state;
 }

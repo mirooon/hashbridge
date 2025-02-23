@@ -7,7 +7,7 @@ import { CopyField } from '../components/CopyField';
 import { Countdown } from '../components/Countdown';
 import { QrCode } from '../components/QrCode';
 import { useNow } from '../hooks/useNow';
-import { formatBtc } from '../lib/format';
+import { formatBtc, formatSui } from '../lib/format';
 
 export function DepositStep({ recovery, view }: { recovery: RecoveryFile; view: SwapView | null }) {
   const now = useNow(1000);
@@ -32,6 +32,7 @@ export function DepositStep({ recovery, view }: { recovery: RecoveryFile; view: 
         <div className="w-full min-w-0 space-y-3">
           <CopyField label="Address" value={recovery.htlcAddress} mono />
           <CopyField label="Amount (BTC)" value={amount} mono />
+          <p className="text-sm text-slate-300">You receive ≈ {formatSui(recovery.suiAmount)} SUI</p>
           <p className="text-sm text-slate-400">{view ? 'Waiting for your deposit…' : 'Connecting to the bot…'}</p>
         </div>
       </div>

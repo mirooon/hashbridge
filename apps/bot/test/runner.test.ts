@@ -1,7 +1,7 @@
 import type { CreateSwapResponse } from '@hashbridge/core/types';
 import { describe, expect, it } from 'vitest';
 import { createApi } from '../src/api';
-import { tick } from '../src/engine/runner';
+import { startLoop, tick } from '../src/engine/runner';
 import { HASH, PREIMAGE, T0, USER_SUI, makeEnv, type TestEnv } from './fakes';
 
 const REFUND_PUB = '03' + '33'.repeat(32);
@@ -73,5 +73,22 @@ describe('tick', () => {
     expect(env.repo.get(a.swapId)!.status).toBe('AWAITING_DEPOSIT');
     expect(env.repo.get(b.swapId)!.status).toBe('SUI_LOCKED');
     expect(env.logs).toContain('swap step failed');
+  });
+});
+
+describe('startLoop', () => {
+  it('keeps running when a whole tick fails', async () => {
+    const env = makeEnv();
+    const stop = new AbortController();
+    let calls = 0;
+    env.repo.listActive = () => {
+      calls++;
+      if (calls === 1) throw new Error('database is locked');
+      stop.abort();
+      return [];
+    };
+    await startLoop(env.deps, stop.signal);
+    expect(calls).toBe(2);
+    expect(env.logs).toContain('tick failed');
   });
 });

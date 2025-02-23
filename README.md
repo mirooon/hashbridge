@@ -18,7 +18,7 @@ The counterparty is an automated resolver bot. It quotes a price, locks SUI for 
 4. **You download a recovery file.** It holds the secret, the refund key and every swap parameter. With it you can refund your BTC from any browser even if the bot disappears.
 5. **You pay** from any signet wallet to the HTLC address. The screen shows a QR code (`bitcoin:` URI), copy buttons and a countdown for the quote.
 6. **The bot locks SUI.** It sees your deposit in the mempool and locks the quoted amount in a Move HTLC with your address as the recipient.
-7. **Your browser verifies the lock, then reveals the secret.** It reads the Sui object straight from a full node and checks its type and package, the recipient, the hash, the amount and the deadline. Only then does it send the secret, and the bot submits the claim and pays the gas. SUI lands in your address.
+7. **Your browser verifies the lock, then reveals the secret.** It reads the Sui object itself, through Sui's GraphQL service, and checks its type and package, the recipient, the hash, the amount and the deadline. Only then does it send the secret, and the bot submits the claim and pays the gas. SUI lands in your address, and the browser confirms on Sui that the HTLC object is gone instead of trusting the bot's status.
 8. **The bot claims the BTC.** Your claim made the secret public on Sui. The bot reads it from the `Claimed` event and spends the Bitcoin HTLC.
 
 A live timeline shows both chains side by side, with a link to mempool.space or Suiscan for every step.
@@ -31,7 +31,7 @@ A live timeline shows both chains side by side, with a link to mempool.space or 
 | The bot locks SUI and you never claim | After 1 hour the bot takes its SUI back; your BTC is refundable after the locktime. |
 | You claim the SUI | The secret is now public. The bot has about 11 hours to claim the BTC before your refund opens. |
 | The bot shows a fake or wrong HTLC | The browser's check fails and your secret is never revealed. |
-| The bot sends your claim nowhere | After 30 seconds the app offers "Claim myself" from a connected wallet, before the Sui deadline. |
+| The bot sends your claim nowhere | If the claim is not on Sui 30 seconds after the secret was revealed, the app offers "Claim myself" from a connected wallet, before the Sui deadline. |
 
 The Sui deadline always ends long before the Bitcoin locktime. The bot refuses to lock SUI if a deposit arrives too close to the locktime, so it can never be left holding a revealed secret it has no time to use.
 
@@ -72,8 +72,8 @@ AWAITING_DEPOSIT → DEPOSIT_SEEN → SUI_LOCKED → SUI_CLAIMED → BTC_CLAIMED
        ↘ EXPIRED         ↘ REJECTED      ↘ SUI_REFUNDED
 ```
 
-- **API:** `POST /swaps` (quote and HTLC), `GET /swaps/:id` (status and explorer links), `POST /swaps/:id/claim` (gasless claim), `GET /health` (balances, block height, rate and limits).
-- **Quotes:** a fixed rate plus a spread, valid for 60 seconds. The amount follows what was actually deposited, up to the configured maximum. Late or too-small deposits are rejected and stay refundable.
+- **API:** `POST /swaps` (quote and HTLC), `GET /swaps/:id` (status and transaction digests; the web app builds the explorer links), `POST /swaps/:id/claim` (gasless claim), `GET /health` (balances, block height, rate and limits).
+- **Quotes:** a fixed rate plus a spread, valid for 60 seconds. The browser refuses a quote below the rate it displayed. The locked amount is the quote scaled to what was actually deposited, up to the configured maximum. Late or too-small deposits are rejected and stay refundable.
 - **Restart safety:** every Sui transaction is signed and stored before it is sent. After a restart the bot looks up the stored digest instead of signing again, so it never locks SUI twice. Signed BTC claims are also stored and re-broadcast byte for byte.
 - **One transaction at a time:** all Sui submissions run through a single queue, so the API and the loop never race for the same gas coin.
 - **Isolation:** one failing swap, for example an RPC timeout, never blocks the others; it is retried on the next cycle.
@@ -81,7 +81,7 @@ AWAITING_DEPOSIT → DEPOSIT_SEEN → SUI_LOCKED → SUI_CLAIMED → BTC_CLAIMED
 ### Browser app
 
 - Rebuilds the Bitcoin script and address before showing anything payable.
-- Reads the Sui HTLC object directly from a full node before revealing the secret. The object must come from the configured Hashbridge package, so the bot cannot substitute a lookalike.
+- Reads the Sui HTLC object itself, through Sui's GraphQL service, before revealing the secret. The object must come from the configured Hashbridge package, so the bot cannot substitute a lookalike. After the reveal it keeps reading the object: the swap counts as done only once the object is gone from Sui.
 - Keeps each swap in local storage under `#/swap/<id>`, so a reload resumes where you left off. "Import recovery file" restores a swap in any browser.
 - Offers refunds when a swap is rejected, expires or stalls, and builds and signs the refund transaction locally with your refund key.
 
@@ -93,7 +93,7 @@ AWAITING_DEPOSIT → DEPOSIT_SEEN → SUI_LOCKED → SUI_CLAIMED → BTC_CLAIMED
             │  mirooon.github.io/hashbridge │  Sui object verification, refunds
             └──────┬─────────┬──────────────┘
        quotes,     │         │  direct reads
-       status,     │         ├──────────────► Sui full node (testnet)
+       status,     │         ├──────────────► Sui GraphQL (testnet)
        claim relay │         └──────────────► Esplora (mempool.space/signet)
             ┌──────▼──────────────────┐
             │  Resolver bot (Node)    │  state machine, SQLite,
@@ -139,7 +139,11 @@ cp apps/web/.env.example apps/web/.env      # set VITE_HTLC_PACKAGE_ID
 pnpm dev                                    # bot on :8787, web on :5173
 ```
 
-Fund the bot's signet address from a signet faucet such as https://signetfaucet.com, and its Sui address from https://faucet.sui.io.
+Fund the bot's signet address from a signet faucet such as https://signetfaucet.com, and its Sui address from https://faucet.sui.io. The bot needs at least 50 SUI **in coin objects**: it pays gas and locks only from coin objects, and counts only them as liquidity. The faucet may credit an address balance instead, which the bot cannot spend (it logs a warning at startup). Turn it into a coin object with the Sui CLI:
+
+```bash
+sui client ptb --split-coins gas "[500000000]" --assign c --transfer-objects "[c]" @<bot address>
+```
 
 ### Environment variables
 
@@ -153,17 +157,18 @@ Fund the bot's signet address from a signet faucet such as https://signetfaucet.
 | `MIN_CONF` | 0 | Confirmations before locking SUI |
 | `BTC_LOCKTIME_BLOCKS` | 72 | Refund delay on Bitcoin |
 | `SUI_TIMEOUT_MS` | 3600000 | Claim window on Sui |
-| `SAFETY_BLOCKS` | 12 | Minimum blocks left before the locktime |
+| `SAFETY_BLOCKS` | 12 | Minimum blocks left before the locktime when SUI is locked; at least 1, and `SUI_TIMEOUT_MS` + 30 min must fit in `SAFETY_BLOCKS` × 10 min |
 | `MIN_BTC_SATS`, `MAX_BTC_SATS` | 10000, 1000000 | Swap size limits |
 | `GAS_RESERVE_MIST` | 200000000 | SUI kept back for gas |
-| `ESPLORA_URL`, `SUI_RPC_URL` | public signet / testnet endpoints | Chain access |
+| `ESPLORA_URL`, `SUI_RPC_URL` | public signet / testnet endpoints | Chain access. The bot derives its Sui GraphQL URL from `SUI_RPC_URL`, so it must be a `fullnode.<network>.sui.io` host |
 | `PORT`, `POLL_INTERVAL_MS`, `DB_PATH` | 8787, 3000, `./hashbridge.db` | Process settings |
 
-| Web (`apps/web/.env`) | Meaning |
-|---|---|
-| `VITE_API_URL` | Bot URL |
-| `VITE_HTLC_PACKAGE_ID` | Package the browser accepts HTLC objects from |
-| `VITE_ESPLORA_URL` | Esplora endpoint for refunds and block height |
+| Web (`apps/web/.env`) | Default | Meaning |
+|---|---|---|
+| `VITE_API_URL` | `http://localhost:8787` | Bot URL |
+| `VITE_HTLC_PACKAGE_ID` | — | Package the browser accepts HTLC objects from |
+| `VITE_ESPLORA_URL` | `https://mempool.space/signet/api` | Esplora endpoint for deposits, refunds and block height |
+| `VITE_SUI_GRAPHQL_URL` | `https://graphql.testnet.sui.io/graphql` | Sui GraphQL endpoint the browser reads the HTLC from |
 
 ## Tests
 
@@ -195,3 +200,4 @@ See `docs/deploy.md` for the details and the free-tier limits.
 - One direction (BTC → SUI) and one resolver with a fixed rate.
 - With `MIN_CONF=0` the bot trusts the mempool, which keeps the demo fast but lets a user replace the deposit (RBF) after the bot has locked SUI. Use `MIN_CONF=1` or more outside a demo.
 - On Render's free plan a restart or redeploy wipes the bot's database, so the bot is never redeployed while a swap is in progress.
+- Republish the package for contract changes; do not use `sui client upgrade` — event types keep the original package id. The bot finds a new HTLC by its `Locked` event; if a lock lands without one, the bot records the transaction, never signs a second lock for that swap and logs that manual action is needed.

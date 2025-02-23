@@ -6,7 +6,7 @@ import { Card } from '../components/Card';
 import { Countdown } from '../components/Countdown';
 import type { HashbridgeApi } from '../lib/api';
 import { formatBtc, formatSui, parseBtcToSats } from '../lib/format';
-import { buildRecovery, parseSuiAddress, prepareSwap, verifyBotResponse } from '../lib/new-swap';
+import { buildRecovery, parseSuiAddress, prepareSwap, quoteProblems, verifyBotResponse } from '../lib/new-swap';
 import type { LocalSwapState } from '../lib/storage';
 
 const RATE_REFRESH_MS = 30_000;
@@ -72,12 +72,18 @@ export function SwapForm({ api, esplora, apiUrl, walletAddress, walletSlot, onCr
       const req = { hash: prep.hash, refundPubkey: prep.refundPubkey, suiRecipient, btcSats: sats };
       const res = await api.createSwap(req);
       const tip = await esplora.tipHeight();
-      const problems = verifyBotResponse(prep, res, tip);
+      // The binding quote is checked against the rate this form displayed.
+      const problems = [...verifyBotResponse(prep, res, tip), ...quoteProblems(res.suiAmount, sats, health)];
       if (problems.length > 0) {
         setError(`Safety check failed: ${problems.join('; ')}. Do not pay.`);
         return;
       }
-      onCreated({ recovery: buildRecovery(prep, req, res, apiUrl, Date.now()), recoveryDownloaded: false, claimSentAt: null });
+      onCreated({
+        recovery: buildRecovery(prep, req, res, apiUrl, Date.now()),
+        recoveryDownloaded: false,
+        revealedAt: null,
+        revealedHtlcId: null,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

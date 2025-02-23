@@ -8,7 +8,10 @@ export interface KeyValueStore {
 export interface LocalSwapState {
   recovery: RecoveryFile;
   recoveryDownloaded: boolean;
-  claimSentAt: number | null;
+  /** When the secret was first sent to the bot, after the HTLC passed verification. Set once, never cleared. */
+  revealedAt: number | null;
+  /** The HTLC object verified before the reveal; the on-chain checks and "Claim myself" use it, not the bot's report. */
+  revealedHtlcId: string | null;
 }
 
 export interface SwapStorage {
@@ -22,6 +25,18 @@ const PREFIX = 'hashbridge:swap:';
 export function memoryStore(): KeyValueStore {
   const map = new Map<string, string>();
   return { getItem: (k) => map.get(k) ?? null, setItem: (k, v) => { map.set(k, v); } };
+}
+
+/** States saved before the reveal marker existed have `claimSentAt`; a number there means the secret was sent. */
+function normalizeState(parsed: Partial<LocalSwapState> & { recovery: RecoveryFile; claimSentAt?: unknown }): LocalSwapState {
+  const revealedAt =
+    typeof parsed.revealedAt === 'number' ? parsed.revealedAt : typeof parsed.claimSentAt === 'number' ? parsed.claimSentAt : null;
+  return {
+    recovery: parsed.recovery,
+    recoveryDownloaded: parsed.recoveryDownloaded === true,
+    revealedAt,
+    revealedHtlcId: typeof parsed.revealedHtlcId === 'string' ? parsed.revealedHtlcId : null,
+  };
 }
 
 function browserStore(): KeyValueStore {
@@ -47,8 +62,8 @@ export function createSwapStorage(store: KeyValueStore = browserStore()): SwapSt
     try {
       const raw = store.getItem(PREFIX + swapId);
       if (!raw) return null;
-      const parsed = JSON.parse(raw) as LocalSwapState;
-      return parsed?.recovery?.swapId === swapId ? parsed : null;
+      const parsed = JSON.parse(raw) as (Partial<LocalSwapState> & { recovery: RecoveryFile }) | null;
+      return parsed?.recovery?.swapId === swapId ? normalizeState(parsed) : null;
     } catch {
       return null;
     }

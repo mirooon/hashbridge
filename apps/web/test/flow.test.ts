@@ -3,24 +3,32 @@ import { describe, expect, it } from 'vitest';
 import { parseRoute, screenFor, stepIndex, swapHref } from '../src/lib/flow';
 import type { LocalSwapState } from '../src/lib/storage';
 
-const local = (recoveryDownloaded = true): LocalSwapState => ({ recovery: { swapId: 's' } as RecoveryFile, recoveryDownloaded, claimSentAt: null });
+const local = (recoveryDownloaded = true): LocalSwapState => ({
+  recovery: { swapId: 's' } as RecoveryFile, recoveryDownloaded, revealedAt: null, revealedHtlcId: null,
+});
 const view = (status: SwapView['status']) => ({ status }) as SwapView;
 
 describe('screenFor', () => {
   it('asks for the recovery file first', () => {
-    expect(screenFor(local(false), view('SUI_LOCKED'))).toBe('recovery');
+    expect(screenFor(local(false), view('SUI_LOCKED'), false)).toBe('recovery');
   });
 
   it('maps statuses to screens', () => {
-    expect(screenFor(local(), null)).toBe('deposit');
-    expect(screenFor(local(), view('AWAITING_DEPOSIT'))).toBe('deposit');
-    expect(screenFor(local(), view('DEPOSIT_SEEN'))).toBe('timeline');
-    expect(screenFor(local(), view('SUI_LOCKED'))).toBe('timeline');
-    expect(screenFor(local(), view('SUI_CLAIMED'))).toBe('done');
-    expect(screenFor(local(), view('BTC_CLAIMED'))).toBe('done');
-    expect(screenFor(local(), view('REJECTED'))).toBe('refund');
-    expect(screenFor(local(), view('EXPIRED'))).toBe('refund');
-    expect(screenFor(local(), view('SUI_REFUNDED'))).toBe('refund');
+    expect(screenFor(local(), null, false)).toBe('deposit');
+    expect(screenFor(local(), view('AWAITING_DEPOSIT'), false)).toBe('deposit');
+    expect(screenFor(local(), view('DEPOSIT_SEEN'), false)).toBe('timeline');
+    expect(screenFor(local(), view('SUI_LOCKED'), false)).toBe('timeline');
+    expect(screenFor(local(), view('SUI_CLAIMED'), true)).toBe('done');
+    expect(screenFor(local(), view('BTC_CLAIMED'), true)).toBe('done');
+    expect(screenFor(local(), view('REJECTED'), false)).toBe('refund');
+    expect(screenFor(local(), view('EXPIRED'), false)).toBe('refund');
+    expect(screenFor(local(), view('SUI_REFUNDED'), false)).toBe('refund');
+  });
+
+  it('shows the swap as done only once the claim is confirmed on-chain, whatever the bot says', () => {
+    expect(screenFor(local(), view('SUI_CLAIMED'), false)).toBe('timeline');
+    expect(screenFor(local(), view('BTC_CLAIMED'), false)).toBe('timeline');
+    expect(screenFor(local(), view('SUI_LOCKED'), true)).toBe('timeline');
   });
 });
 

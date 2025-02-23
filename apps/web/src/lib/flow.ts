@@ -3,7 +3,8 @@ import type { LocalSwapState } from './storage';
 
 export type Screen = 'recovery' | 'deposit' | 'timeline' | 'done' | 'refund';
 
-export function screenFor(local: LocalSwapState, view: SwapView | null): Screen {
+/** `claimedOnChain`: the HTLC object is gone from Sui (read by the browser), so the claim really happened. */
+export function screenFor(local: LocalSwapState, view: SwapView | null, claimedOnChain: boolean): Screen {
   if (!local.recoveryDownloaded) return 'recovery';
   if (!view) return 'deposit';
   switch (view.status) {
@@ -14,7 +15,8 @@ export function screenFor(local: LocalSwapState, view: SwapView | null): Screen 
       return 'timeline';
     case 'SUI_CLAIMED':
     case 'BTC_CLAIMED':
-      return 'done';
+      // The bot's word is not enough: the swap is done once the chain confirms the claim.
+      return claimedOnChain ? 'done' : 'timeline';
     case 'REJECTED':
     case 'EXPIRED':
     case 'SUI_REFUNDED':

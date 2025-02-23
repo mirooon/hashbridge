@@ -3,15 +3,21 @@ import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { toBase64 } from '@mysten/sui/utils';
 import { describe, expect, it } from 'vitest';
 import {
+  addressBalanceWarning,
   bytesFromMoveJson,
+  COIN_READ_MASK,
   createSuiChain,
   findClaimInEvents,
   findClaimInTx,
   gasBudgetFromDryRun,
   graphqlUrlFor,
   isTxNotFoundError,
+  listAllCoinPages,
+  MAX_GAS_COINS,
   normalizeGrpcError,
   parseClaimPage,
+  spendableCoins,
+  sumBalances,
   toTxResult,
   type ClaimPage,
 } from '../src/sui-chain';
@@ -293,5 +299,62 @@ describe('bytesFromMoveJson', () => {
     expect(Array.from(bytesFromMoveJson([1, 2]))).toEqual([1, 2]);
     expect(Array.from(bytesFromMoveJson(toBase64(Uint8Array.from([3, 4]))))).toEqual([3, 4]);
     expect(() => bytesFromMoveJson(5)).toThrow(/vector<u8>/);
+  });
+});
+
+describe('spendable SUI', () => {
+  const coin = (n: number, balance?: bigint) => ({ objectId: `0x${n}`, version: BigInt(n), digest: `d${n}`, balance });
+
+  it('reads coin balances (Object.balance, proto field 101)', () => {
+    expect(COIN_READ_MASK).toEqual(['object_id', 'version', 'digest', 'balance']);
+  });
+
+  it('pages through every coin object', async () => {
+    const tokens: Array<Uint8Array | undefined> = [];
+    const pages = [
+      { objects: [coin(1, 5n), coin(2, 7n)], nextPageToken: Uint8Array.of(1) },
+      { objects: [coin(3, 11n)], nextPageToken: Uint8Array.of(2) },
+      { objects: [coin(4, 13n)] },
+    ];
+    const all = await listAllCoinPages(async (token) => {
+      tokens.push(token);
+      return pages[tokens.length - 1]!;
+    });
+    expect(all.map((c) => c.objectId)).toEqual(['0x1', '0x2', '0x3', '0x4']);
+    expect(tokens).toEqual([undefined, Uint8Array.of(1), Uint8Array.of(2)]);
+  });
+
+  it('stops after the page cap (counting less SUI, never more)', async () => {
+    let calls = 0;
+    const all = await listAllCoinPages(async () => {
+      calls++;
+      return { objects: [coin(calls, 1n)], nextPageToken: Uint8Array.of(calls) };
+    }, 3);
+    expect(calls).toBe(3);
+    expect(all).toHaveLength(3);
+  });
+
+  it('pays gas with the largest coins, up to the protocol limit, and counts exactly those as liquidity', () => {
+    const coins = spendableCoins([coin(1, 5n), coin(2, 50n), { objectId: '0x9' }, coin(3, undefined), coin(4, 20n)]);
+    expect(coins).toEqual([
+      { objectId: '0x2', version: '2', digest: 'd2', balance: 50n },
+      { objectId: '0x4', version: '4', digest: 'd4', balance: 20n },
+      { objectId: '0x1', version: '1', digest: 'd1', balance: 5n },
+      { objectId: '0x3', version: '3', digest: 'd3', balance: 0n },
+    ]);
+    expect(sumBalances(coins)).toBe(75n);
+    const many = spendableCoins(Array.from({ length: MAX_GAS_COINS + 5 }, (_, i) => coin(i + 1, BigInt(i + 1))));
+    expect(many).toHaveLength(MAX_GAS_COINS);
+    expect(many.at(-1)!.balance).toBe(6n);
+    expect(sumBalances([])).toBe(0n);
+  });
+
+  it('warns when part of the SUI is held as an address balance', () => {
+    const addr = '0x' + 'b'.repeat(64);
+    expect(addressBalanceWarning(1_000n, 1_000n, addr)).toBeNull();
+    expect(addressBalanceWarning(1_000n, 900n, addr)).toBeNull();
+    expect(addressBalanceWarning(1_000n, 51_000n, addr)).toBe(
+      `50000 MIST held as address balance cannot pay gas; split coins with sui client ptb --split-coins gas "[500000000]" --assign c --transfer-objects "[c]" @${addr}`,
+    );
   });
 });

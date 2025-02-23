@@ -12,10 +12,21 @@ const recovery: RecoveryFile = {
 describe('createSwapStorage', () => {
   it('saves, loads and updates swaps', () => {
     const storage = createSwapStorage(memoryStore());
-    storage.save({ recovery, recoveryDownloaded: false, claimSentAt: null });
+    storage.save({ recovery, recoveryDownloaded: false, revealedAt: null, revealedHtlcId: null });
     expect(storage.load('swap-1')?.recovery).toEqual(recovery);
-    expect(storage.update('swap-1', { claimSentAt: 5 })?.claimSentAt).toBe(5);
-    expect(storage.load('swap-1')?.claimSentAt).toBe(5);
+    expect(storage.update('swap-1', { revealedAt: 5, revealedHtlcId: '0xh' })).toMatchObject({ revealedAt: 5, revealedHtlcId: '0xh' });
+    expect(storage.load('swap-1')).toEqual({ recovery, recoveryDownloaded: false, revealedAt: 5, revealedHtlcId: '0xh' });
+  });
+
+  it('reads states stored before the reveal marker existed', () => {
+    const store = memoryStore();
+    store.setItem('hashbridge:swap:swap-1', JSON.stringify({ recovery, recoveryDownloaded: true, claimSentAt: null }));
+    store.setItem('hashbridge:swap:swap-2', JSON.stringify({ recovery: { ...recovery, swapId: 'swap-2' }, recoveryDownloaded: true, claimSentAt: 7 }));
+    const storage = createSwapStorage(store);
+    expect(storage.load('swap-1')).toEqual({ recovery, recoveryDownloaded: true, revealedAt: null, revealedHtlcId: null });
+    // An old claimSentAt means the secret was sent: it counts as the reveal.
+    expect(storage.load('swap-2')).toMatchObject({ revealedAt: 7, revealedHtlcId: null });
+    expect(storage.update('swap-2', { recoveryDownloaded: true })).not.toHaveProperty('claimSentAt');
   });
 
   it('returns null for unknown or corrupt entries', () => {
@@ -24,7 +35,7 @@ describe('createSwapStorage', () => {
     const storage = createSwapStorage(store);
     expect(storage.load('missing')).toBeNull();
     expect(storage.load('bad')).toBeNull();
-    expect(storage.update('missing', { claimSentAt: 1 })).toBeNull();
+    expect(storage.update('missing', { revealedAt: 1 })).toBeNull();
   });
 });
 

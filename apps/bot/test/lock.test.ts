@@ -56,6 +56,50 @@ describe('stepDepositSeen', () => {
     expect(env.sui.lastLock?.amountMist).toBe(123_380_000_000n);
   });
 
+  it('prices the lock from the stored quote, not the current RATE', async () => {
+    const env = makeEnv({ rate: 20_000 });
+    env.repo.insert(seen());
+    await stepDepositSeen(env.repo.get('swap-1')!, env.deps);
+    expect(env.sui.lastLock?.amountMist).toBe(12_338_000_000n);
+    expect(env.repo.get('swap-1')!.suiAmount).toBe('12338000000');
+  });
+
+  it('scales the quote to a partial deposit', async () => {
+    const env = makeEnv();
+    env.repo.insert(seen({ depositSats: 50_000 }));
+    await stepDepositSeen(env.repo.get('swap-1')!, env.deps);
+    expect(env.sui.lastLock?.amountMist).toBe(6_169_000_000n);
+  });
+
+  it('keeps the priced amount when a failed lock is retried', async () => {
+    const env = makeEnv();
+    env.sui.nextFails = true;
+    env.repo.insert(seen({ depositSats: 50_000 }));
+    await expect(stepDepositSeen(env.repo.get('swap-1')!, env.deps)).rejects.toThrow(/failed/);
+    await stepDepositSeen(env.repo.get('swap-1')!, env.deps);
+    expect(env.sui.locks.map((l) => l.amountMist)).toEqual([6_169_000_000n, 6_169_000_000n]);
+    expect(env.repo.get('swap-1')).toMatchObject({ status: 'SUI_LOCKED', suiAmount: '6169000000' });
+  });
+
+  it('records a lock that landed without a Locked event and stops', async () => {
+    const env = makeEnv();
+    env.sui.noLockedEvent = true;
+    env.repo.insert(seen());
+    await expect(stepDepositSeen(env.repo.get('swap-1')!, env.deps)).rejects.toThrow(/no Locked event/);
+    expect(env.repo.get('swap-1')).toMatchObject({ status: 'DEPOSIT_SEEN', lockDigest: 'digest-1', htlcObjectId: null, pendingTx: null });
+    expect(env.logs).toContain('lock landed without Locked event; manual action needed');
+  });
+
+  it('never signs another lock while a landed lock lacks its Locked event', async () => {
+    const env = makeEnv();
+    env.repo.insert(seen({ lockDigest: 'digest-9', suiAmount: '12338000000', suiDeadlineMs: T0 + 3_600_000 }));
+    await stepDepositSeen(env.repo.get('swap-1')!, env.deps);
+    await stepDepositSeen(env.repo.get('swap-1')!, env.deps);
+    expect(env.sui.signed).toHaveLength(0);
+    expect(env.repo.get('swap-1')).toMatchObject({ status: 'DEPOSIT_SEEN', lockDigest: 'digest-9' });
+    expect(env.logs.filter((l) => l === 'lock landed without Locked event; manual action needed')).toHaveLength(2);
+  });
+
   it('resumes a lock that landed before a crash without signing again', async () => {
     const env = makeEnv();
     env.repo.insert(

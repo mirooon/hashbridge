@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { EsploraClient } from '@hashbridge/core/esplora';
-import type { RecoveryFile, SwapView } from '@hashbridge/core/types';
+import type { RecoveryFile } from '@hashbridge/core/types';
 import { ImportRecovery } from './components/ImportRecovery';
 import { Steps } from './components/Steps';
 import { API_URL, ESPLORA_URL, HTLC_PACKAGE_ID, SUI_GRAPHQL_URL } from './config';
@@ -27,7 +27,8 @@ const storage = createSwapStorage();
 export interface AppSlots {
   walletAddress?: string | null;
   walletSlot?: ReactNode;
-  fallbackSlot?: (recovery: RecoveryFile, view: SwapView | null) => ReactNode;
+  /** "Claim myself" for `htlcObjectId` (the HTLC verified before the reveal, else the bot's report). */
+  fallbackSlot?: (recovery: RecoveryFile, htlcObjectId: string | null) => ReactNode;
 }
 
 export default function App(slots: AppSlots) {
@@ -86,10 +87,10 @@ function ActiveSwap({ local, onLocalChange, slots }: { local: LocalSwapState; on
   const progress = useSwapProgress({ api: swapApi, storage, htlcReader, packageId: HTLC_PACKAGE_ID, recovery, esplora });
   const [showRefund, setShowRefund] = useState(false);
   const now = useNow(5_000);
-  const screen = showRefund ? 'refund' : screenFor(local, progress.view);
+  const screen = showRefund ? 'refund' : screenFor(local, progress.view, progress.claimedOnChain);
   const offerRefund = refundOffered(progress.view, recovery.createdAt, now);
   const refundReason =
-    progress.view?.rejectReason ?? (progress.view?.status === 'SUI_REFUNDED' ? 'you did not claim the SUI before the Sui deadline' : null);
+    progress.view?.rejectReason ?? (progress.view?.status === 'SUI_REFUNDED' ? 'the SUI lock expired before it was claimed' : null);
 
   const markDownloaded = () => {
     storage.update(recovery.swapId, { recoveryDownloaded: true });
@@ -105,7 +106,7 @@ function ActiveSwap({ local, onLocalChange, slots }: { local: LocalSwapState; on
         <TimelineStep
           recovery={recovery}
           progress={progress}
-          fallbackSlot={slots.fallbackSlot?.(recovery, progress.view)}
+          fallbackSlot={slots.fallbackSlot?.(recovery, progress.htlcObjectId)}
           onRefundOptions={offerRefund ? () => setShowRefund(true) : undefined}
         />
       )}

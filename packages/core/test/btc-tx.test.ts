@@ -83,6 +83,15 @@ describe('buildRefundTx', () => {
     expect(tx.outs[0]!.value).toBe(100_000 - built.fee);
   });
 
+  it('pays a taproot (tb1p) destination', () => {
+    const xOnly = Buffer.from(KEY.publicKey.slice(1));
+    const taproot = bitcoin.payments.p2tr({ internalPubkey: xOnly, network: BTC_NETWORK }).address!;
+    expect(taproot.startsWith('tb1p')).toBe(true);
+    const tx = bitcoin.Transaction.fromHex(buildRefundTx({ ...base, destination: taproot }).hex);
+    expect(tx.outs[0]!.script.toString('hex')).toBe(bitcoin.address.toOutputScript(taproot, BTC_NETWORK).toString('hex'));
+    expect(tx.outs[0]!.script.toString('hex')).toMatch(/^5120[0-9a-f]{64}$/);
+  });
+
   it('needs at least one UTXO', () => {
     expect(() => buildRefundTx({ ...base, utxos: [] })).toThrow(/no utxos/);
   });

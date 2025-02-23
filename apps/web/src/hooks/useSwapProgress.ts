@@ -1,9 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import type { BtcChain, RecoveryFile, SwapView, Utxo } from '@hashbridge/core/types';
 import type { HashbridgeApi } from '../lib/api';
-import { MIN_REMAINING_BEFORE_REVEAL_MS, minExpectedMist, nextClaimAction, paidSatsFrom } from '../lib/claim-flow';
-import type { SwapStorage } from '../lib/storage';
-import { verifyHtlc, type HtlcReader } from '../lib/sui-verify';
+import {
+  chainExists,
+  chainWatch,
+  nextChainReading,
+  nextClaimAction,
+  postRevealState,
+  revealProblems,
+  shouldResendClaim,
+  type ChainReading,
+  type ChainWatch,
+} from '../lib/claim-flow';
+import type { LocalSwapState, SwapStorage } from '../lib/storage';
+import type { HtlcReader } from '../lib/sui-verify';
 import { useNow } from './useNow';
 
 export const POLL_MS = 2_000;
@@ -12,12 +22,29 @@ export interface SwapProgress {
   view: SwapView | null;
   apiError: string | null;
   lastApiOkAt: number | null;
+  /** Why the secret was not revealed (only before the reveal). */
   problems: string[];
   claimError: string | null;
+  /** The secret was sent to the bot, in this session or an earlier one. */
+  revealed: boolean;
+  /** No claim on-chain 30 s after the reveal: offer "Claim myself". */
   fallback: boolean;
+  /** The HTLC object is gone from Sui, i.e. the claim landed (read from the chain, not from the bot). */
+  claimedOnChain: boolean;
+  /** HTLC to claim: the one verified before the reveal, else the one the bot reports. */
+  htlcObjectId: string | null;
+}
+
+interface Reveal {
+  at: number;
+  htlcObjectId: string | null;
 }
 
 const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+function revealOf(state: LocalSwapState | null): Reveal | null {
+  return state && state.revealedAt !== null ? { at: state.revealedAt, htlcObjectId: state.revealedHtlcId } : null;
+}
 
 export function useSwapProgress(opts: {
   api: HashbridgeApi;
@@ -34,16 +61,25 @@ export function useSwapProgress(opts: {
   const [lastApiOkAt, setLastApiOkAt] = useState<number | null>(null);
   const [problems, setProblems] = useState<string[]>([]);
   const [claimError, setClaimError] = useState<string | null>(null);
-  const [fallback, setFallback] = useState(false);
+  const [reveal, setReveal] = useState<Reveal | null>(null);
+  const [reading, setReading] = useState<ChainReading | null>(null);
   const now = useNow(1_000);
-  const busy = useRef(false);
-  const lastAttemptAt = useRef(0);
-  // undefined = not read from storage yet; once set (number or null) the ref is authoritative,
-  // so a storage that silently fails to persist cannot re-trigger or block the reveal.
-  const claimSentAtRef = useRef<number | null | undefined>(undefined);
+  const verifyBusy = useRef(false);
+  const lastVerifyAt = useRef(0);
+  const claimBusy = useRef(false);
+  const lastClaimAt = useRef(0);
+  const claimAccepted = useRef(false);
+  const readBusy = useRef(false);
+  const lastReadAt = useRef(0);
+  // The reveal marker is read from storage once per swap and then kept here, so a storage that silently fails to
+  // persist can neither re-trigger the reveal nor make the browser forget that the secret is out.
+  const revealRef = useRef<{ swapId: string; value: Reveal | null } | null>(null);
+  // The watch in force when a chain read returns; reads of anything else are dropped (see nextChainReading).
+  const watchRef = useRef<ChainWatch | null>(null);
 
   useEffect(() => {
-    claimSentAtRef.current = undefined;
+    setReading(null);
+    claimAccepted.current = false;
   }, [recovery.swapId]);
 
   useEffect(() => {
@@ -68,15 +104,63 @@ export function useSwapProgress(opts: {
   }, [api, recovery.swapId]);
 
   useEffect(() => {
-    const claimSentAt =
-      claimSentAtRef.current !== undefined ? claimSentAtRef.current : (storage.load(recovery.swapId)?.claimSentAt ?? null);
-    const action = nextClaimAction(view, claimSentAt, now);
-    setFallback(action.kind === 'show-fallback');
-    if (action.kind !== 'verify-and-claim' || busy.current || !view) return;
-    // The tick re-runs this effect every second: retry a failed check or claim at most once per poll interval.
-    if (now - lastAttemptAt.current < POLL_MS) return;
-    lastAttemptAt.current = now;
-    busy.current = true;
+    if (revealRef.current?.swapId !== recovery.swapId) {
+      revealRef.current = { swapId: recovery.swapId, value: revealOf(storage.load(recovery.swapId)) };
+    }
+    const current = revealRef.current.value;
+    setReveal(current);
+    const revealedAt = current?.at ?? null;
+    const watch = chainWatch(current, view);
+    watchRef.current = watch;
+
+    // The chain, not the bot, tells whether the claim landed: a claim deletes the Htlc object.
+    if (watch && chainExists(reading, watch) !== false && !readBusy.current && now - lastReadAt.current >= POLL_MS) {
+      lastReadAt.current = now;
+      readBusy.current = true;
+      const { id } = watch;
+      const at = Date.now();
+      const record = (exists: boolean | null) => setReading((prev) => nextChainReading(prev, { id, exists, at }, watchRef.current));
+      htlcReader
+        .fetchHtlc(id)
+        .then(
+          (htlc) => record(htlc !== null),
+          () => record(null),
+        )
+        .finally(() => {
+          readBusy.current = false;
+        });
+    }
+
+    const sendClaim = (at: number) => {
+      lastClaimAt.current = at;
+      claimBusy.current = true;
+      api
+        .claim(recovery.swapId, recovery.secret)
+        .then(
+          () => {
+            claimAccepted.current = true;
+            setClaimError(null);
+          },
+          // The secret is out either way; the request is repeated while the claim is not on-chain (the endpoint is idempotent).
+          (err) => setClaimError(message(err)),
+        )
+        .finally(() => {
+          claimBusy.current = false;
+        });
+    };
+
+    const state = postRevealState({ revealedAt, now, reading, watch });
+    if (!claimBusy.current && shouldResendClaim({ revealedAt, claimAccepted: claimAccepted.current, state, now, lastAttemptAt: lastClaimAt.current })) {
+      sendClaim(now);
+      return;
+    }
+
+    const action = nextClaimAction(view, revealedAt);
+    if (action.kind !== 'verify-and-claim' || verifyBusy.current || !view) return;
+    // The tick re-runs this effect every second: retry a failed check at most once per poll interval.
+    if (now - lastVerifyAt.current < POLL_MS) return;
+    lastVerifyAt.current = now;
+    verifyBusy.current = true;
 
     const verify = async (): Promise<string[]> => {
       let htlc;
@@ -94,17 +178,7 @@ export function useSwapProgress(opts: {
           return [`could not read the deposit from Bitcoin: ${message(err)}`];
         }
       }
-      const paidSats = paidSatsFrom(utxos, view.depositSats);
-      const found = verifyHtlc(htlc, {
-        packageId,
-        recipient: recovery.suiRecipient,
-        hash: recovery.hash,
-        minAmountMist: paidSats === null ? 0n : minExpectedMist(recovery, paidSats),
-        nowMs: Date.now(),
-        minRemainingMs: MIN_REMAINING_BEFORE_REVEAL_MS,
-      });
-      if (paidSats === null) found.push('deposit amount could not be verified');
-      return found;
+      return revealProblems({ htlc, utxos, botDepositSats: view.depositSats, recovery, packageId, nowMs: Date.now() });
     };
 
     (async () => {
@@ -116,22 +190,30 @@ export function useSwapProgress(opts: {
       }
       setProblems(found);
       if (found.length > 0) return;
-      const sentAt = Date.now();
-      claimSentAtRef.current = sentAt;
-      storage.update(recovery.swapId, { claimSentAt: sentAt });
-      try {
-        await api.claim(recovery.swapId, recovery.secret);
-        setClaimError(null);
-      } catch (err) {
-        // The bot's claim endpoint is idempotent: forget the attempt so the next tick re-verifies and re-sends.
-        claimSentAtRef.current = null;
-        storage.update(recovery.swapId, { claimSentAt: null });
-        setClaimError(message(err));
-      }
+      // Mark the reveal before the secret leaves the browser, so a crash or reload never treats it as unrevealed.
+      const revealed: Reveal = { at: Date.now(), htlcObjectId: action.htlcObjectId };
+      revealRef.current = { swapId: recovery.swapId, value: revealed };
+      storage.update(recovery.swapId, { revealedAt: revealed.at, revealedHtlcId: revealed.htlcObjectId });
+      // From now on only readings of the verified HTLC taken after the reveal count.
+      watchRef.current = chainWatch(revealed, view);
+      setReading(null);
+      setReveal(revealed);
+      sendClaim(revealed.at);
     })().finally(() => {
-      busy.current = false;
+      verifyBusy.current = false;
     });
-  }, [view, now, api, storage, htlcReader, packageId, recovery, esplora]);
+  }, [view, now, api, storage, htlcReader, packageId, recovery, esplora, reading]);
 
-  return { view, apiError, lastApiOkAt, problems, claimError, fallback };
+  const state = postRevealState({ revealedAt: reveal?.at ?? null, now, reading, watch: chainWatch(reveal, view) });
+  return {
+    view,
+    apiError,
+    lastApiOkAt,
+    problems: reveal ? [] : problems,
+    claimError,
+    revealed: reveal !== null,
+    fallback: state === 'show-fallback',
+    claimedOnChain: state === 'claimed-on-chain',
+    htlcObjectId: reveal?.htlcObjectId ?? view?.htlcObjectId ?? null,
+  };
 }

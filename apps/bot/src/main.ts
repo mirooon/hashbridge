@@ -6,7 +6,7 @@ import { createApi } from './api';
 import { loadConfig } from './config';
 import { startLoop } from './engine/runner';
 import { openSwapRepo } from './repo';
-import { createSuiChain } from './sui-chain';
+import { addressBalanceWarning, createSuiChain } from './sui-chain';
 import type { EngineDeps, Logger } from './types';
 
 const log: Logger = (msg, extra) =>
@@ -25,6 +25,18 @@ const deps: EngineDeps = {
   log,
 };
 
+/** SUI held as an address balance shows up in getBalance but cannot pay gas or locks; say so at startup. */
+async function warnAboutAddressBalance(): Promise<void> {
+  try {
+    const [coinMist, totalMist] = await Promise.all([sui.balanceMist(), sui.totalBalanceMist()]);
+    const warning = addressBalanceWarning(coinMist, totalMist, sui.address());
+    if (warning) log(`WARNING: ${warning}`, { coinMist, totalMist });
+  } catch (err) {
+    log('could not check the SUI balance at startup', { error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
 serve({ fetch: createApi(deps).fetch, port: config.port });
 log('hashbridge bot started', { port: config.port, suiAddress: sui.address(), btcAddress: p2wpkhAddress(botKey.publicKey) });
+void warnAboutAddressBalance();
 void startLoop(deps);

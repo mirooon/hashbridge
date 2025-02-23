@@ -38,8 +38,8 @@ function WalletApp() {
     <App
       walletAddress={account?.address ?? null}
       walletSlot={<ConnectButton connectText="Connect" />}
-      fallbackSlot={(recovery, view) => (
-        <WalletClaim recovery={recovery} htlcObjectId={view?.htlcObjectId ?? null} packageId={HTLC_PACKAGE_ID} suiClient={suiGrpc} />
+      fallbackSlot={(recovery, htlcObjectId) => (
+        <WalletClaim recovery={recovery} htlcObjectId={htlcObjectId} packageId={HTLC_PACKAGE_ID} suiClient={suiGrpc} />
       )}
     />
   );

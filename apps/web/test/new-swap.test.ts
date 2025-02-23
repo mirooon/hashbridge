@@ -3,7 +3,7 @@ import { btcKeyFromPrivateKeyHex } from '@hashbridge/core/keys';
 import { bytesToHex, hashSecret, hexToBytes } from '@hashbridge/core/secret';
 import type { CreateSwapResponse } from '@hashbridge/core/types';
 import { describe, expect, it } from 'vitest';
-import { buildRecovery, parseSuiAddress, prepareSwap, verifyBotResponse } from '../src/lib/new-swap';
+import { buildRecovery, parseSuiAddress, prepareSwap, quoteProblems, verifyBotResponse } from '../src/lib/new-swap';
 
 const BOT_PUB = '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
 const TIP = 241_800;
@@ -57,6 +57,27 @@ describe('verifyBotResponse', () => {
   it('rejects a malformed bot key', () => {
     const prep = prepareSwap();
     expect(verifyBotResponse(prep, { ...honestResponse(prep), botPubkey: 'zz' }, TIP)).toEqual(['bot public key is malformed']);
+  });
+});
+
+describe('quoteProblems', () => {
+  const health = { rate: 12_400, spreadBps: 50 };
+
+  it('accepts a quote at or above the displayed rate', () => {
+    expect(quoteProblems('12338000000', 100_000, health)).toEqual([]);
+    expect(quoteProblems('12338000001', 100_000, health)).toEqual([]);
+  });
+
+  it('rejects a quote below the displayed rate', () => {
+    expect(quoteProblems('12337999999', 100_000, health)).toEqual(['bot quote is below the displayed rate']);
+    expect(quoteProblems('1', 100_000, health)).toEqual(['bot quote is below the displayed rate']);
+  });
+
+  it('skips the rate check when no rate was displayed, but never accepts a malformed amount', () => {
+    expect(quoteProblems('1', 100_000, null)).toEqual([]);
+    expect(quoteProblems('12.5', 100_000, health)).toEqual(['bot quote is malformed']);
+    expect(quoteProblems('', 100_000, null)).toEqual(['bot quote is malformed']);
+    expect(quoteProblems(undefined as unknown as string, 100_000, health)).toEqual(['bot quote is malformed']);
   });
 });
 

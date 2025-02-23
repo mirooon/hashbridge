@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config';
 
@@ -51,6 +52,28 @@ describe('loadConfig', () => {
   it('refuses a Sui timeout that outlives the BTC locktime', () => {
     expect(() => loadConfig({ ...BASE, BTC_LOCKTIME_BLOCKS: '2', SUI_TIMEOUT_MS: '3600000' })).toThrow(/SUI_TIMEOUT_MS/);
     expect(() => loadConfig({ ...BASE, BTC_LOCKTIME_BLOCKS: '2', SUI_TIMEOUT_MS: '600000' })).not.toThrow();
+  });
+
+  it('requires the Sui deadline plus a 30 min BTC-claim margin to fit in SAFETY_BLOCKS', () => {
+    // Defaults: 60 min + 30 min <= 12 blocks x 10 min.
+    expect(() => loadConfig(BASE)).not.toThrow();
+    expect(() => loadConfig({ ...BASE, SAFETY_BLOCKS: '2' })).toThrow(/SAFETY_BLOCKS/);
+    expect(() => loadConfig({ ...BASE, SUI_TIMEOUT_MS: '5400000' })).not.toThrow();
+    expect(() => loadConfig({ ...BASE, SUI_TIMEOUT_MS: '5400001' })).toThrow(/SUI_TIMEOUT_MS/);
+    // The demo checklist's refund run.
+    expect(() => loadConfig({ ...BASE, BTC_LOCKTIME_BLOCKS: '2', SUI_TIMEOUT_MS: '600000', SAFETY_BLOCKS: '12' })).not.toThrow();
+  });
+
+  it('accepts the values shipped in .env.example', () => {
+    const lines = readFileSync(new URL('../.env.example', import.meta.url), 'utf8').split('\n');
+    const example = Object.fromEntries(lines.filter((l) => /^[A-Z_]+=/.test(l)).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+    expect(example).toMatchObject({ SUI_TIMEOUT_MS: '3600000', SAFETY_BLOCKS: '12', BTC_LOCKTIME_BLOCKS: '72' });
+    expect(() => loadConfig({ ...example, ...BASE })).not.toThrow();
+  });
+
+  it('requires at least one safety block', () => {
+    expect(() => loadConfig({ ...BASE, SAFETY_BLOCKS: '0' })).toThrow('SAFETY_BLOCKS must be at least 1');
+    expect(() => loadConfig({ ...BASE, SAFETY_BLOCKS: '-3' })).toThrow('SAFETY_BLOCKS must be at least 1');
   });
 
   it('refuses min above max', () => {

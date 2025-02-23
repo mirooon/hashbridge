@@ -51,7 +51,12 @@ export async function tick(deps: EngineDeps): Promise<void> {
 
 export async function startLoop(deps: EngineDeps, signal?: AbortSignal): Promise<void> {
   while (!signal?.aborted) {
-    await tick(deps);
+    try {
+      await tick(deps);
+    } catch (err) {
+      // e.g. the database failing in listActive: log it and try again next cycle instead of crashing the process.
+      deps.log('tick failed', { error: err instanceof Error ? err.message : String(err) });
+    }
     await new Promise((resolve) => setTimeout(resolve, deps.config.pollIntervalMs));
   }
 }

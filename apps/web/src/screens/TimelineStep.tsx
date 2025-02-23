@@ -55,7 +55,8 @@ export function TimelineStep({
           </span>
         )}
       </div>
-      {progress.problems.length > 0 && (
+      {/* Before the reveal only: once the secret is out, "not revealed" would be a lie. */}
+      {!progress.revealed && progress.problems.length > 0 && (
         <div className="mt-4 rounded-xl bg-red-950 px-4 py-3 text-sm text-red-300">
           Safety check failed, your secret was NOT revealed:
           <ul className="mt-1 list-disc pl-5">
@@ -65,10 +66,19 @@ export function TimelineStep({
           </ul>
         </div>
       )}
-      {progress.claimError && <p className="mt-4 text-sm text-red-300">Claim request failed: {progress.claimError}</p>}
+      {progress.revealed && !progress.claimedOnChain && !progress.fallback && (
+        <p className="mt-4 text-sm text-slate-400">Secret revealed. Waiting for the claim to appear on Sui…</p>
+      )}
+      {progress.claimedOnChain && (
+        <p className="mt-4 text-sm text-emerald-400">The HTLC is gone from Sui: your claim went through. Waiting for the bot to update.</p>
+      )}
+      {progress.claimError && !progress.claimedOnChain && (
+        <p className="mt-4 text-sm text-red-300">Claim request failed: {progress.claimError}. Retrying…</p>
+      )}
       {progress.fallback && (
         <div className="mt-4 rounded-xl bg-amber-950 px-4 py-3 text-sm text-amber-200">
-          The bot has not submitted your claim yet. You can claim the SUI yourself with a wallet that holds a little SUI for gas.
+          Your claim is not on Sui yet, 30 seconds after your secret was revealed. You can claim the SUI yourself with a wallet
+          that holds a little SUI for gas.
           {fallbackSlot && <div className="mt-3">{fallbackSlot}</div>}
         </div>
       )}
